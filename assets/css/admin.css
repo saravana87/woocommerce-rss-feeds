@@ -1,0 +1,59 @@
+.wc-rss-feeds-container {
+    max-width: 1200px;
+}
+
+.wc-rss-feeds-section {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    padding: 20px;
+}
+
+.wc-rss-feeds-section h2 {
+    margin-top: 0;
+    color: #23282d;
+}
+
+.wc-rss-feeds-section h3 {
+    color: #23282d;
+    font-size: 16px;
+    margin-bottom: 10px;
+}
+
+.progress-bar {
+    background: #f1f1f1;
+    border-radius: 4px;
+    height: 20px;
+    margin: 10px 0;
+    overflow: hidden;
+}
+
+.progress-fill {
+    background: #007cba;
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+#wc-rss-scan-status {
+    margin: 10px 0;
+    font-style: italic;
+}
+
+#wc-rss-product-count {
+    font-weight: bold;
+    color: #46b450;
+    margin: 10px 0;
+}
+
+.button {
+    margin-right: 10px;
+}
+
+code {
+    background: #f1f1f1;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: monospace;
+}
