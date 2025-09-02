@@ -3,7 +3,7 @@
  * Plugin Name: WooCommerce RSS Feeds
  * Description: Generate RSS feeds for WooCommerce products
  * Version: 1.0.0
- * Author: Your Name
+ * Author: Sara
  * Requires at least: 5.0
  * Tested up to: 6.4
  * Requires PHP: 7.4
@@ -145,7 +145,26 @@ class WC_RSS_Feeds {
                 <div class="wc-rss-feeds-section">
                     <h2><?php _e( 'RSS Feed URLs', 'wc-rss-feeds' ); ?></h2>
                     <div id="wc-rss-feed-urls">
-                        <p><?php _e( 'No feeds generated yet. Please scan products first.', 'wc-rss-feeds' ); ?></p>
+                        <?php
+                        $feed_generated = get_option( 'wc_rss_feeds_generated' );
+                        $upload_dir = wp_upload_dir();
+                        $file_url = $upload_dir['baseurl'] . '/wc-rss-feeds/products-feed.xml';
+                        if ( $feed_generated ) {
+                            echo '<h3>' . __( 'Your RSS Feed is Ready!', 'wc-rss-feeds' ) . '</h3>';
+                            echo '<p><strong>' . __( 'Feed URL:', 'wc-rss-feeds' ) . '</strong></p>';
+                            echo '<p><code>' . esc_url( $file_url ) . '</code></p>';
+                            echo '<div class="feed-actions">';
+                            echo '<a href="' . esc_url( $file_url ) . '" target="_blank" class="button button-primary">' . __( 'View Feed', 'wc-rss-feeds' ) . '</a> ';
+                            echo '<a href="' . esc_url( $file_url ) . '" download class="button button-secondary">' . __( 'Download RSS File', 'wc-rss-feeds' ) . '</a>';
+                            echo '</div>';
+                            echo '<p class="description">' . __( 'Copy this URL to use in RSS readers, or click Download to save the RSS file locally.', 'wc-rss-feeds' ) . '</p>';
+                        } else {
+                            echo '<p>' . __( 'No feeds generated yet. Please scan products and generate feeds first.', 'wc-rss-feeds' ) . '</p>';
+                            echo '<p><strong>' . __( 'Expected Feed URL:', 'wc-rss-feeds' ) . '</strong></p>';
+                            echo '<p><code>' . esc_url( $file_url ) . '</code></p>';
+                            echo '<p class="description">' . __( 'This will be the URL of your RSS feed after generation.', 'wc-rss-feeds' ) . '</p>';
+                        }
+                        ?>
                     </div>
                 </div>
             </div>
@@ -198,14 +217,70 @@ class WC_RSS_Feeds {
             wp_send_json_error( __( 'Please scan products first', 'wc-rss-feeds' ) );
         }
 
-        // Mark feeds as generated
-        update_option( 'wc_rss_feeds_generated', true );
-        update_option( 'wc_rss_feeds_timestamp', current_time( 'timestamp' ) );
+        // Generate and save RSS file to server
+        $result = $this->generate_and_save_rss_file();
 
-        wp_send_json_success( array(
-            'message' => __( 'RSS feeds generated successfully', 'wc-rss-feeds' ),
-            'feed_url' => site_url( '/feed/wc-products/' )
-        ) );
+        if ( $result['success'] ) {
+            // Mark feeds as generated
+            update_option( 'wc_rss_feeds_generated', true );
+            update_option( 'wc_rss_feeds_timestamp', current_time( 'timestamp' ) );
+            update_option( 'wc_rss_file_path', $result['file_path'] );
+
+            wp_send_json_success( array(
+                'message' => sprintf( __( 'RSS feeds generated successfully! %d products saved to file.', 'wc-rss-feeds' ), $result['product_count'] ),
+                'feed_url' => site_url( '/feed/wc-products/' ),
+                'file_path' => $result['file_path']
+            ) );
+        } else {
+            wp_send_json_error( $result['message'] );
+        }
+    }
+
+    /**
+     * Generate and save RSS file to server
+     */
+    private function generate_and_save_rss_file() {
+        // Create feeds directory if it doesn't exist
+        $upload_dir = wp_upload_dir();
+        $feeds_dir = $upload_dir['basedir'] . '/wc-rss-feeds';
+
+        if ( ! file_exists( $feeds_dir ) ) {
+            wp_mkdir_p( $feeds_dir );
+        }
+
+        $file_path = $feeds_dir . '/products-feed.xml';
+
+        // Get all products (no limit for file generation)
+        $args = array(
+            'post_type'      => 'product',
+            'posts_per_page' => -1, // Get all products
+            'post_status'    => 'publish',
+            'orderby'        => 'date',
+            'order'          => 'DESC',
+        );
+
+        $products = get_posts( $args );
+        $product_count = count( $products );
+
+        // Start output buffering to capture RSS content
+        ob_start();
+        $this->generate_rss_content( $products );
+        $rss_content = ob_get_clean();
+
+        // Save to file
+        if ( file_put_contents( $file_path, $rss_content ) !== false ) {
+            return array(
+                'success' => true,
+                'file_path' => $file_path,
+                'product_count' => $product_count,
+                'message' => 'RSS file saved successfully'
+            );
+        } else {
+            return array(
+                'success' => false,
+                'message' => 'Failed to save RSS file to server'
+            );
+        }
     }
 
     /**
@@ -216,26 +291,9 @@ class WC_RSS_Feeds {
     }
 
     /**
-     * Generate product feed
+     * Generate RSS content (extracted from generate_product_feed)
      */
-    public function generate_product_feed() {
-        // Check if feeds are generated
-        if ( ! get_option( 'wc_rss_feeds_generated' ) ) {
-            wp_die( __( 'RSS feeds not generated yet. Please generate them from the admin panel.', 'wc-rss-feeds' ) );
-        }
-
-        header( 'Content-Type: application/rss+xml; charset=' . get_option( 'blog_charset' ), true );
-
-        $args = array(
-            'post_type'      => 'product',
-            'posts_per_page' => 50, // Limit for performance
-            'post_status'    => 'publish',
-            'orderby'        => 'date',
-            'order'          => 'DESC',
-        );
-
-        $products = get_posts( $args );
-
+    private function generate_rss_content( $products ) {
         echo '<?xml version="1.0" encoding="' . get_option( 'blog_charset' ) . '"?>' . "\n";
         ?>
 <rss version="2.0"
@@ -252,8 +310,9 @@ class WC_RSS_Feeds {
     <atom:link href="<?php self_link(); ?>" rel="self" type="application/rss+xml" />
     <link><?php bloginfo_rss( 'url' ) ?></link>
     <description><?php bloginfo_rss( 'description' ) ?></description>
-    <lastBuildDate><?php echo mysql2date( 'D, d M Y H:i:s +0000', get_lastpostmodified( 'GMT' ), false ); ?></lastBuildDate>
-    <language><?php bloginfo_rss( 'language' ); ?></language>
+    <lastBuildDate><?php echo mysql2date( 'D, d M Y H:i:s +0530', get_lastpostmodified( 'GMT' ), false ); ?></lastBuildDate>
+    <language>ta-en</language>
+    <generator>WooCommerce RSS Feeds v<?php echo WC_RSS_FEEDS_VERSION; ?></generator>
     <sy:updatePeriod><?php echo apply_filters( 'rss_update_period', 'hourly' ); ?></sy:updatePeriod>
     <sy:updateFrequency><?php echo apply_filters( 'rss_update_frequency', '1' ); ?></sy:updateFrequency>
     <?php do_action( 'rss2_head' ); ?>
@@ -262,37 +321,175 @@ class WC_RSS_Feeds {
         <?php
         $product_obj = wc_get_product( $product->ID );
         if ( ! $product_obj ) continue;
+
+        // Get both descriptions to include all Tamil content
+        $description = '';
+        $full_description = $product_obj->get_description();
+        $short_description = $product_obj->get_short_description();
+
+        // Include short description first (often contains Tamil summary)
+        if ( ! empty( $short_description ) ) {
+            $description .= wp_kses_post( $short_description );
+        }
+
+        // Add full description if it exists and is different
+        if ( ! empty( $full_description ) && $full_description !== $short_description ) {
+            if ( ! empty( $description ) ) {
+                $description .= ' '; // Add space between descriptions
+            }
+            $description .= wp_kses_post( $full_description );
+        }
+
+        if ( empty( $description ) ) {
+            $description = esc_html( $product_obj->get_name() );
+        }
         ?>
     <item>
         <title><?php echo esc_html( $product_obj->get_name() ); ?></title>
         <link><?php echo esc_url( get_permalink( $product->ID ) ); ?></link>
-        <pubDate><?php echo mysql2date( 'D, d M Y H:i:s +0000', get_post_time( 'Y-m-d H:i:s', true, $product->ID ), false ); ?></pubDate>
-        <dc:creator><![CDATA[<?php echo get_the_author_meta( 'display_name', $product->post_author ); ?>]]></dc:creator>
-        <?php if ( $product_obj->get_description() ) : ?>
-        <description><![CDATA[<?php echo wp_trim_words( $product_obj->get_description(), 50 ); ?>]]></description>
+        <description><![CDATA[<?php echo wp_kses_post( $description ); ?>]]></description>
+        <pubDate><?php echo mysql2date( 'D, d M Y H:i:s +0530', get_post_time( 'Y-m-d H:i:s', true, $product->ID ), false ); ?></pubDate>
+        <guid><?php echo esc_url( get_permalink( $product->ID ) ); ?></guid>
+        <language>ta-en</language>
+
+        <?php if ( $product_obj->get_sku() ) : ?>
+        <sku><?php echo esc_html( $product_obj->get_sku() ); ?></sku>
         <?php endif; ?>
+
+        <?php if ( $product_obj->get_regular_price() ) : ?>
+        <price><?php echo esc_html( $product_obj->get_regular_price() ); ?></price>
+        <currency><?php echo esc_html( get_woocommerce_currency() ); ?></currency>
+        <?php endif; ?>
+
+        <?php if ( $product_obj->get_sale_price() && $product_obj->get_sale_price() < $product_obj->get_regular_price() ) : ?>
+        <sale_price><?php echo esc_html( $product_obj->get_sale_price() ); ?></sale_price>
+        <?php endif; ?>
+
+        <availability><?php echo $product_obj->get_stock_status() === 'instock' ? 'in_stock' : 'out_of_stock'; ?></availability>
+
+        <?php
+        $categories = wp_get_post_terms( $product->ID, 'product_cat', array( 'fields' => 'names' ) );
+        if ( ! empty( $categories ) ) :
+        ?>
+        <category><?php echo esc_html( implode( ', ', $categories ) ); ?></category>
+        <?php endif; ?>
+
+        <author><?php echo esc_html( get_the_author_meta( 'display_name', $product->post_author ) ); ?></author>
+
+        <?php
+        $keywords = array();
+        if ( ! empty( $categories ) ) {
+            $keywords = array_merge( $keywords, $categories );
+        }
+        $tags = wp_get_post_terms( $product->ID, 'product_tag', array( 'fields' => 'names' ) );
+        if ( ! empty( $tags ) ) {
+            $keywords = array_merge( $keywords, $tags );
+        }
+        if ( ! empty( $keywords ) ) :
+        ?>
+        <keywords><?php echo esc_html( implode( ', ', $keywords ) ); ?></keywords>
+        <?php endif; ?>
+
         <content:encoded><![CDATA[
-            <div>
+            <div itemscope itemtype="https://schema.org/Product">
+                <meta itemprop="name" content="<?php echo esc_attr( $product_obj->get_name() ); ?>" />
+                <meta itemprop="description" content="<?php echo esc_attr( $description ); ?>" />
+                <link itemprop="url" href="<?php echo esc_url( get_permalink( $product->ID ) ); ?>" />
+
                 <?php if ( $product_obj->get_image_id() ) : ?>
-                <img src="<?php echo esc_url( wp_get_attachment_image_url( $product_obj->get_image_id(), 'medium' ) ); ?>" alt="<?php echo esc_attr( $product_obj->get_name() ); ?>" />
+                <img itemprop="image" src="<?php echo esc_url( wp_get_attachment_image_url( $product_obj->get_image_id(), 'medium' ) ); ?>" alt="<?php echo esc_attr( $product_obj->get_name() ); ?>" />
                 <?php endif; ?>
+
                 <h2><?php echo esc_html( $product_obj->get_name() ); ?></h2>
-                <p><?php echo wp_kses_post( $product_obj->get_description() ); ?></p>
-                <p><strong><?php _e( 'Price:', 'wc-rss-feeds' ); ?></strong> <?php echo $product_obj->get_price_html(); ?></p>
+                <p><?php echo wp_kses_post( $description ); ?></p>
+
+                <div itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+                    <p><strong><?php _e( 'Price:', 'wc-rss-feeds' ); ?></strong>
+                    <span itemprop="price" content="<?php echo esc_attr( $product_obj->get_price() ); ?>">
+                        <?php echo $product_obj->get_price_html(); ?>
+                    </span>
+                    <meta itemprop="priceCurrency" content="<?php echo esc_attr( get_woocommerce_currency() ); ?>" />
+                    <link itemprop="availability" href="https://schema.org/<?php echo $product_obj->get_stock_status() === 'instock' ? 'InStock' : 'OutOfStock'; ?>" />
+                    </p>
+                </div>
+
                 <?php if ( $product_obj->get_stock_status() === 'instock' ) : ?>
                 <p><strong><?php _e( 'Availability:', 'wc-rss-feeds' ); ?></strong> <?php _e( 'In Stock', 'wc-rss-feeds' ); ?></p>
                 <?php else : ?>
                 <p><strong><?php _e( 'Availability:', 'wc-rss-feeds' ); ?></strong> <?php _e( 'Out of Stock', 'wc-rss-feeds' ); ?></p>
                 <?php endif; ?>
+
+                <?php if ( $product_obj->get_sku() ) : ?>
+                <p><strong><?php _e( 'SKU:', 'wc-rss-feeds' ); ?></strong> <?php echo esc_html( $product_obj->get_sku() ); ?></p>
+                <?php endif; ?>
+
+                <?php if ( ! empty( $categories ) ) : ?>
+                <p><strong><?php _e( 'Categories:', 'wc-rss-feeds' ); ?></strong> <?php echo esc_html( implode( ', ', $categories ) ); ?></p>
+                <?php endif; ?>
+
+                <?php if ( $product_obj->get_average_rating() > 0 ) : ?>
+                <div itemprop="aggregateRating" itemscope itemtype="https://schema.org/AggregateRating">
+                    <p><strong><?php _e( 'Rating:', 'wc-rss-feeds' ); ?></strong>
+                    <span itemprop="ratingValue"><?php echo esc_html( $product_obj->get_average_rating() ); ?></span> / 5
+                    (<span itemprop="reviewCount"><?php echo esc_html( $product_obj->get_review_count() ); ?></span> reviews)
+                    </p>
+                </div>
+                <?php endif; ?>
             </div>
         ]]></content:encoded>
-        <guid isPermaLink="false"><?php echo esc_url( get_permalink( $product->ID ) ); ?>#<?php echo $product->ID; ?></guid>
         <?php do_action( 'rss2_item' ); ?>
     </item>
     <?php endforeach; ?>
 </channel>
 </rss>
         <?php
+    }
+
+    /**
+     * Generate product feed
+     */
+    /**
+     * Generate product feed (now serves static file)
+     */
+    public function generate_product_feed() {
+        // Check if feeds are generated
+        if ( ! get_option( 'wc_rss_feeds_generated' ) ) {
+            wp_die( __( 'RSS feeds not generated yet. Please generate them from the admin panel.', 'wc-rss-feeds' ) );
+        }
+
+        $file_path = get_option( 'wc_rss_file_path' );
+
+        // Check if this is a download request
+        $is_download = isset( $_GET['download'] ) && $_GET['download'] === '1';
+
+        if ( $is_download ) {
+            // Set headers for file download
+            header( 'Content-Type: application/rss+xml; charset=' . get_option( 'blog_charset' ), true );
+            header( 'Content-Disposition: attachment; filename="woocommerce-products-feed.xml"' );
+            header( 'Cache-Control: no-cache, no-store, must-revalidate' );
+            header( 'Pragma: no-cache' );
+            header( 'Expires: 0' );
+        } else {
+            header( 'Content-Type: application/rss+xml; charset=' . get_option( 'blog_charset' ), true );
+        }
+
+        // Serve the static RSS file
+        if ( file_exists( $file_path ) ) {
+            readfile( $file_path );
+            exit;
+        } else {
+            // Fallback: generate dynamically if file doesn't exist
+            $args = array(
+                'post_type'      => 'product',
+                'posts_per_page' => -1,
+                'post_status'    => 'publish',
+                'orderby'        => 'date',
+                'order'          => 'DESC',
+            );
+
+            $products = get_posts( $args );
+            $this->generate_rss_content( $products );
+        }
     }
 }
 
